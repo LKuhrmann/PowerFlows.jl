@@ -1,9 +1,8 @@
 @testset "Rectangular CI: compute_bus_state_offsets" begin
     @testset "all PQ" begin
         bt = fill(PSY.ACBusTypes.PQ, 5)
-        off, bs, total = PF.compute_bus_state_offsets(bt)
+        off, total = PF.compute_bus_state_offsets(bt)
         @test off == Int32[1, 3, 5, 7, 9, 11]
-        @test bs == fill(Int8(2), 5)
         @test total == 10
     end
 
@@ -15,10 +14,9 @@
             PSY.ACBusTypes.PV,
             PSY.ACBusTypes.PQ,
         ]
-        off, bs, total = PF.compute_bus_state_offsets(bt)
+        off, total = PF.compute_bus_state_offsets(bt)
         # Every bus is a 2-slot block: a PV bus has no reactive-power state.
         @test off == Int32[1, 3, 5, 7, 9, 11]
-        @test bs == fill(Int8(2), 5)
         @test total == 10
     end
 end
@@ -62,12 +60,12 @@ end
     pf = ACRectangularPowerFlow{NewtonRaphsonACPowerFlow}()
     data = PF.PowerFlowData(pf, sys)
     bt = view(data.bus_type, :, 1)
-    off, bs, total = PF.compute_bus_state_offsets(bt)
+    off, total = PF.compute_bus_state_offsets(bt)
     n_lccs = size(data.lcc.p_set, 1)
     total_state = total + 4 * n_lccs
 
     x = Vector{Float64}(undef, total_state)
-    PF.rect_initial_state!(x, data, off, bs, 1)
+    PF.rect_initial_state!(x, data, off, 1)
 
     # Bus 1 in c_sys5 is REF: x[off[1]] = P_gen_net, x[off[1]+1] = Q_gen_net
     # The (e,f) representation must hold for PQ/PV buses
@@ -83,7 +81,7 @@ end
         end
         bt[i] != PSY.ACBusTypes.REF && (data.bus_angles[i, 1] = NaN)
     end
-    PF.rect_update_data!(data, x, off, bs, 1)
+    PF.rect_update_data!(data, x, off, 1)
 
     for i in 1:length(bt)
         if bt[i] == PSY.ACBusTypes.PQ
@@ -102,7 +100,7 @@ end
     residual = PF.ACRectangularCIResidual(data, 1)
     x0 = Vector{Float64}(undef, length(residual.Rv))
     PF.rect_initial_state!(
-        x0, data, residual.bus_state_offset, residual.bus_block_size, 1,
+        x0, data, residual.bus_state_offset, 1,
     )
     residual(data, x0, 1)
     base_norm = norm(residual.Rv, 1)
@@ -123,8 +121,7 @@ end
 
     # _rect_fill_state! with both ts = 1 must equal rect_initial_state!.
     a = Vector{Float64}(undef, n)
-    PF.rect_initial_state!(a, data, residual.bus_state_offset,
-        residual.bus_block_size, 1)
+    PF.rect_initial_state!(a, data, residual.bus_state_offset, 1)
     b = Vector{Float64}(undef, n)
     PF._rect_fill_state!(b, data, residual.bus_state_offset, 1, 1)
     @test a == b
@@ -148,8 +145,7 @@ end
     data = PF.PowerFlowData(pf, sys)
     residual = PF.ACRectangularCIResidual(data, 1)
     x0 = Vector{Float64}(undef, length(residual.Rv))
-    PF.rect_initial_state!(x0, data, residual.bus_state_offset,
-        residual.bus_block_size, 1)
+    PF.rect_initial_state!(x0, data, residual.bus_state_offset, 1)
 
     newx0 = PF._enhanced_flat_start(x0, data, residual, 1)
 

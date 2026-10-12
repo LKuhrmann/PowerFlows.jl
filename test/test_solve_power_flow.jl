@@ -1003,7 +1003,6 @@ end
         @test !(@test_logs (:error, r"non-physical root") match_mode = :any solve_power_flow!(
             data; vm_validation_range = band))
         @test !data.converged[1]
-        @test all(isnan, data.bus_magnitude[:, 1])
 
         data = PowerFlowData(pf, sys)
         @test solve_power_flow!(
@@ -1026,6 +1025,19 @@ end
         data,
     ))
     @test !any(data.converged)
+end
+
+@testset "vm_validation_range checks PQ buses only" begin
+    sys = PSB.build_system(PSB.PSITestSystems, "c_sys14"; add_forecasts = false)
+    band = (min = 0.5, max = 1.0718)
+    for pf in (
+        ACPolarPowerFlow{NewtonRaphsonACPowerFlow}(),
+        ACRectangularPowerFlow{NewtonRaphsonACPowerFlow}(),
+        ACMixedPowerFlow{NewtonRaphsonACPowerFlow}(),
+    )
+        data = PowerFlowData(pf, sys)
+        @test solve_power_flow!(data; vm_validation_range = band)
+    end
 end
 
 @testset "check_root_type accepts the operable root" begin
@@ -1082,13 +1094,21 @@ end
         @test !(@test_logs (:error, r"non-operable") match_mode = :any solve_power_flow!(
             data; vm_validation_range = wide, check_root_type = true))
         @test !data.converged[1]
-        @test all(isnan, data.bus_magnitude[:, 1])
         break
     end
     @test found > 0
 end
 
-@testset "polar enhanced flat start: multiple islands, PV-less island" begin
+@testset "check_root_type treats a singular reduced Jacobian as not operable" begin
+    sys = PSB.build_system(PSB.PSITestSystems, "c_sys14"; add_forecasts = false)
+    data = PowerFlowData(ACPolarPowerFlow{NewtonRaphsonACPowerFlow}(), sys)
+    @test solve_power_flow!(data)
+    data.bus_magnitude[:, 1] .= 0.0
+    @test !(@test_logs (:error, r"singular") match_mode = :any PF._root_operable(
+        data, 1, (check_root_type = true,)))
+end
+
+function _two_island_pv_less_system()
     sys = System(100.0)
     b1 = _add_simple_bus!(sys, 1, ACBusTypes.REF, 230, 1.02)
     b2 = _add_simple_bus!(sys, 2, ACBusTypes.PV, 230, 1.04)
@@ -1103,6 +1123,11 @@ end
     _add_simple_thermal_standard!(sys, b2, 0.1, 0.0)
     _add_simple_load!(sys, b3, 10.0, 2.0)
     _add_simple_load!(sys, b5, 10.0, 2.0)
+    return sys
+end
+
+@testset "polar enhanced flat start: multiple islands, PV-less island" begin
+    sys = _two_island_pv_less_system()
     data = PowerFlowData(ACPowerFlow(), sys)
     bus_lookup = PF.get_bus_lookup(data)
     x = PF._enhanced_flat_start(PF.calculate_x0(data, 1), data, 1)
@@ -1112,20 +1137,7 @@ end
 end
 
 @testset "rect/mixed enhanced flat start: multiple islands, PV-less island" begin
-    sys = System(100.0)
-    b1 = _add_simple_bus!(sys, 1, ACBusTypes.REF, 230, 1.02)
-    b2 = _add_simple_bus!(sys, 2, ACBusTypes.PV, 230, 1.04)
-    b3 = _add_simple_bus!(sys, 3, ACBusTypes.PQ, 230)
-    b4 = _add_simple_bus!(sys, 4, ACBusTypes.REF, 230, 1.06)
-    b5 = _add_simple_bus!(sys, 5, ACBusTypes.PQ, 230)
-    _add_simple_line!(sys, b1, b2, 1e-3, 1e-2)
-    _add_simple_line!(sys, b2, b3, 1e-3, 1e-2)
-    _add_simple_line!(sys, b4, b5, 1e-3, 1e-2)
-    _add_simple_source!(sys, b1)
-    _add_simple_source!(sys, b4)
-    _add_simple_thermal_standard!(sys, b2, 0.1, 0.0)
-    _add_simple_load!(sys, b3, 10.0, 2.0)
-    _add_simple_load!(sys, b5, 10.0, 2.0)
+    sys = _two_island_pv_less_system()
     for (pf, init!, make_residual) in (
         (
             ACRectangularPowerFlow{NewtonRaphsonACPowerFlow}(),
@@ -1142,7 +1154,7 @@ end
         bus_lookup = PF.get_bus_lookup(data)
         residual = make_residual(data, 1)
         x0 = Vector{Float64}(undef, length(residual.Rv))
-        init!(x0, data, residual.bus_state_offset, residual.bus_block_size, 1)
+        init!(x0, data, residual.bus_state_offset, 1)
         x = PF._enhanced_flat_start(x0, data, residual, 1)
         @test all(isfinite, x)
         function magnitude(bus)

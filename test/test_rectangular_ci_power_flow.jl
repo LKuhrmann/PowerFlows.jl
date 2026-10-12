@@ -20,11 +20,7 @@ end
     sys = PSB.build_system(PSB.MatpowerTestSystems, "matpower_ACTIVSg2000_sys")
     function flat_data(pf)
         data = PF.PowerFlowData(pf, sys)
-        ref = findfirst(==(PSY.ACBusTypes.REF), data.bus_type[:, 1])
-        for i in axes(data.bus_type, 1)
-            data.bus_type[i, 1] == PSY.ACBusTypes.PQ && (data.bus_magnitude[i, 1] = 1.0)
-            data.bus_angles[i, 1] = data.bus_angles[ref, 1]
-        end
+        flat_start!(data)
         return data
     end
     settings = PF.SolutionParameters(; enhanced_flat_start = false, maxIterations = 20)

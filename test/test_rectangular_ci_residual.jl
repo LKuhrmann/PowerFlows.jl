@@ -7,7 +7,7 @@
         data = PF.PowerFlowData(pf_rect, sys)
         R = PF.ACRectangularCIResidual(data, 1)
         x = Vector{Float64}(undef, length(R.Rv))
-        PF.rect_initial_state!(x, data, R.bus_state_offset, R.bus_block_size, 1)
+        PF.rect_initial_state!(x, data, R.bus_state_offset, 1)
         R(data, x, 1)
         @test LinearAlgebra.norm(R.Rv, Inf) < 1e-7
     end
@@ -20,7 +20,7 @@
         data = PF.PowerFlowData(pf_rect, sys)
         R = PF.ACRectangularCIResidual(data, 1)
         x = Vector{Float64}(undef, length(R.Rv))
-        PF.rect_initial_state!(x, data, R.bus_state_offset, R.bus_block_size, 1)
+        PF.rect_initial_state!(x, data, R.bus_state_offset, 1)
         R(data, x, 1)
         @test LinearAlgebra.norm(R.Rv, Inf) < 1e-7
     end
@@ -35,7 +35,7 @@ end
     data.bus_angles[:, 1] .= 0.0
     R = PF.ACRectangularCIResidual(data, 1)
     x = Vector{Float64}(undef, length(R.Rv))
-    PF.rect_initial_state!(x, data, R.bus_state_offset, R.bus_block_size, 1)
+    PF.rect_initial_state!(x, data, R.bus_state_offset, 1)
     R(data, x, 1)
     # Something to converge from
     @test LinearAlgebra.norm(R.Rv, Inf) > 1e-3

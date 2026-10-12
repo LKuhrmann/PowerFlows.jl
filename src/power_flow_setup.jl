@@ -112,7 +112,7 @@ function improve_x0(pf::ACRectangularPowerFlow,
 )
     x0 = Vector{Float64}(undef, length(residual.Rv))
     rect_initial_state!(
-        x0, data, residual.bus_state_offset, residual.bus_block_size, time_step,
+        x0, data, residual.bus_state_offset, time_step,
     )
     residual(data, x0, time_step)
     prev = findlast(@view(data.converged[1:(time_step - 1)]))
@@ -153,7 +153,7 @@ function improve_x0(pf::ACMixedPowerFlow,
 )
     x0 = Vector{Float64}(undef, length(residual.Rv))
     mixed_initial_state!(
-        x0, data, residual.bus_state_offset, residual.bus_block_size, time_step,
+        x0, data, residual.bus_state_offset, time_step,
     )
     residual(data, x0, time_step)
     prev = findlast(@view(data.converged[1:(time_step - 1)]))

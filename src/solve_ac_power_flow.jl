@@ -356,7 +356,7 @@ function _solve_column!(
             resolve_linear_solver_backend(get(merged_kwargs, :linear_solver, nothing)))
     end
     converged = _ac_power_flow_with_area_relax!(data, pf, time_step; merged_kwargs...)
-    converged = converged && _voltages_in_band(pf, data, time_step, merged_kwargs)
+    converged = converged && _voltages_in_band(data, time_step, merged_kwargs)
     converged = converged && _root_operable(data, time_step, merged_kwargs)
     save_device_state!(cd, data, time_step)
     converged && _warn_vsc_limit_violations(data, time_step)
@@ -412,17 +412,11 @@ function _solve_column!(
     return converged
 end
 
-# Polar holds PV |V| at its setpoint; rectangular and mixed carry PV (e, f) as state.
-_band_checked(::ACPolarPowerFlow, bt::PSY.ACBusTypes.Value) = bt == PSY.ACBusTypes.PQ
-_band_checked(::AbstractACPowerFlow, bt::PSY.ACBusTypes.Value) =
-    bt == PSY.ACBusTypes.PQ || bt == PSY.ACBusTypes.PV
-
 """`vm_validation_range` is the acceptance band of a converged step: a step that meets `tol` with
-a published |V| outside it at a PQ bus (PQ or PV in the rectangular and mixed formulations) has
-found a non-physical root (|V| ≈ 0 from a flat start) and is reported not converged. Off with
+a published |V| outside it at a PQ bus has found a non-physical root (|V| ≈ 0 from a flat
+start) and is reported not converged. Off with
 `validate_voltage_magnitudes = false`, which also silences the per-iterate warnings."""
 function _voltages_in_band(
-    pf::AbstractACPowerFlow,
     data::ACPowerFlowData,
     time_step::Int,
     merged_kwargs::NamedTuple,
@@ -431,17 +425,16 @@ function _voltages_in_band(
     range = merged_kwargs.vm_validation_range
     n_out = 0
     @inbounds for i in axes(data.bus_magnitude, 1)
-        _band_checked(pf, data.bus_type[i, time_step]) || continue
+        data.bus_type[i, time_step] == PSY.ACBusTypes.PQ || continue
         vm = data.bus_magnitude[i, time_step]
         n_out += !(range.min <= vm <= range.max)
     end
     iszero(n_out) && return true
-    _error_out_of_band(pf, data, time_step, range, n_out)
+    _error_out_of_band(data, time_step, range, n_out)
     return false
 end
 
 @noinline function _error_out_of_band(
-    pf::AbstractACPowerFlow,
     data::ACPowerFlowData,
     time_step::Int,
     range::MinMax,
@@ -451,7 +444,7 @@ end
     out = Int[]
     vmin, vmax = Inf, -Inf
     for i in axes(data.bus_magnitude, 1)
-        _band_checked(pf, data.bus_type[i, time_step]) || continue
+        data.bus_type[i, time_step] == PSY.ACBusTypes.PQ || continue
         vm = data.bus_magnitude[i, time_step]
         vmin = min(vmin, vm)
         vmax = max(vmax, vm)
@@ -477,11 +470,21 @@ polar Jacobian at the published voltages (any formulation). Zero-injection buses
 three-winding star buses with a capacitive self-admittance read negative at correct roots."""
 function _root_operable(data::ACPowerFlowData, time_step::Int, merged_kwargs::NamedTuple)
     merged_kwargs.check_root_type || return true
-    buses, dvdq = _vq_self_sensitivities(data, time_step)
+    buses, dvdq = try
+        _vq_self_sensitivities(data, time_step)
+    catch e
+        _is_singular_factorization(e) || rethrow()
+        @error "Time step $time_step: the reduced V-Q Jacobian is singular; " *
+               "the root is treated as not operable."
+        return false
+    end
     all(>(0.0), dvdq) && return true
     _error_inoperable_root(data, time_step, buses, dvdq)
     return false
 end
+
+_is_singular_factorization(::LinearAlgebra.SingularException) = true
+_is_singular_factorization(::Exception) = false
 
 function _carries_power(data::ACPowerFlowData, i::Int, time_step::Int)
     return !(

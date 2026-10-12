@@ -55,9 +55,9 @@ take effect.
 
 # Voltage validation
 - `validate_voltage_magnitudes::Bool`, `vm_validation_range::MinMax`: the band is a hard
-  acceptance band. A step that meets `tol` with a PQ |V| outside it (PQ or PV in the
-  rectangular and mixed formulations) is a non-physical root, reported not converged.
-  Iterates outside it only warn. `validate_voltage_magnitudes = false` turns both off.
+  acceptance band. A step that meets `tol` with a PQ |V| outside it is a non-physical
+  root, reported not converged. Iterates outside it only warn.
+  `validate_voltage_magnitudes = false` turns both off.
 - `check_root_type::Bool`: also reject an in-band converged step that is not on the
   operable (high-voltage) branch: one whose V-Q self-sensitivity ∂|V|/∂Q is negative at one
   of the lowest-|V| PQ buses that carry power. Off by default: every converged step builds a

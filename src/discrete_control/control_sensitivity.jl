@@ -213,12 +213,12 @@ end
 
 function _sensitivity_x0(r::ACRectangularCIResidual, data, ts::Int)
     x = zeros(length(r.Rv))
-    rect_initial_state!(x, data, r.bus_state_offset, r.bus_block_size, ts)
+    rect_initial_state!(x, data, r.bus_state_offset, ts)
     return x
 end
 function _sensitivity_x0(r::ACMixedCPBResidual, data, ts::Int)
     x = zeros(length(r.Rv))
-    mixed_initial_state!(x, data, r.bus_state_offset, r.bus_block_size, ts)
+    mixed_initial_state!(x, data, r.bus_state_offset, ts)
     return x
 end
 

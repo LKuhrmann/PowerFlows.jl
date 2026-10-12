@@ -19,7 +19,7 @@ Concrete evaluation models fall into three families:
 | Family | Concrete types                                                                                                         | Purpose                                                                                                                                                                                                   |
 |:------ |:---------------------------------------------------------------------------------------------------------------------- |:--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | DC     | [`DCPowerFlow`](@ref), [`PTDFDCPowerFlow`](@ref), [`vPTDFDCPowerFlow`](@ref)                                           | Linear approximation: solves for voltage angles (or computes flows directly via PTDF). Fast, supports multi-period.                                                                                       |
-| AC     | [`ACPolarPowerFlow`](@ref) (alias [`ACPowerFlow`](@ref)), [`ACRectangularPowerFlow`](@ref), [`ACMixedPowerFlow`](@ref) | Full non-linear AC power flow. Three **formulations** — polar power balance `(V, θ)`, Da Costa current injection `(e, f)`, and mixed current–power balance (MCPB, also rectangular state, `2n` unknowns). |
+| AC     | [`ACPolarPowerFlow`](@ref) (alias [`ACPowerFlow`](@ref)), [`ACRectangularPowerFlow`](@ref), [`ACMixedPowerFlow`](@ref) | Full non-linear AC power flow. Three **formulations** — polar power balance `(V, θ)`, rectangular power mismatch `(e, f)`, and mixed current–power balance (MCPB, also rectangular state, `2n` unknowns). |
 | Export | [`PSSEExportPowerFlow`](@ref)                                                                                          | Writes a PSS/E raw file as a "solve" step.                                                                                                                                                                |
 
 Every AC model carries the bookkeeping for the AC problem: bus-type handling,
@@ -50,7 +50,7 @@ state vector, residual, and Jacobian structure:
     mixes divided current balance at PQ buses with real power balance plus a
     `|Vᵢ|²` constraint at PV buses. Its minimal state vector and predictable
     timing make it attractive for memory-bound large-scale studies; it is also
-    the best-scaling LM formulation at 10k buses and above. Like rectangular, it
+    the lowest-median LM formulation at 10k buses and above. Like rectangular, it
     lacks the polar-only post-processing options. See
     [Mixed Current-Power Balance Formulation](@ref) for the full derivation.
 
@@ -65,12 +65,12 @@ For an AC problem, the evaluation model is parameterized by an
 [`ACPowerFlowSolverType`](@ref) — a tag that selects one of the iterative
 algorithms PowerFlows.jl ships with:
 
-| Solver                                       | When to use it                                 | Notes                                                                                                                                                                 |
-|:-------------------------------------------- |:---------------------------------------------- |:--------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [`NewtonRaphsonACPowerFlow`](@ref) (default) | Well-conditioned systems, warm starts          | Pure Newton step. Optional Iwamoto damping via `SolutionParameters(; iwamoto = true)`.                                                                                |
-| [`TrustRegionACPowerFlow`](@ref)             | Slightly ill-conditioned or unreliable starts  | Powell dogleg. Comparable cost to Newton.                                                                                                                             |
-| [`LevenbergMarquardtACPowerFlow`](@ref)      | Hard-to-converge cases where TR also struggles | More robust, more expensive per iteration; meta-parameters can be sensitive. At scale, prefer LM on [`ACMixedPowerFlow`](@ref) over [`ACRectangularPowerFlow`](@ref). |
-| [`RobustHomotopyPowerFlow`](@ref)            | Pathological initial points                    | Order(s) of magnitude slower than Newton but very robust. *Polar only.*                                                                                               |
+| Solver                                       | When to use it                                 | Notes                                                                                  |
+|:-------------------------------------------- |:---------------------------------------------- |:-------------------------------------------------------------------------------------- |
+| [`NewtonRaphsonACPowerFlow`](@ref) (default) | Well-conditioned systems, warm starts          | Pure Newton step. Optional Iwamoto damping via `SolutionParameters(; iwamoto = true)`. |
+| [`TrustRegionACPowerFlow`](@ref)             | Slightly ill-conditioned or unreliable starts  | Powell dogleg. Comparable cost to Newton.                                              |
+| [`LevenbergMarquardtACPowerFlow`](@ref)      | Hard-to-converge cases where TR also struggles | More robust, more expensive per iteration; meta-parameters can be sensitive.           |
+| [`RobustHomotopyPowerFlow`](@ref)            | Pathological initial points                    | Order(s) of magnitude slower than Newton but very robust. *Polar only.*                |
 
 Construction follows a single pattern — the solver is the type parameter of
 the AC model:
@@ -80,7 +80,7 @@ ACPowerFlow()                                       # polar + Newton-Raphson (de
 ACPowerFlow{TrustRegionACPowerFlow}()               # polar + Powell dogleg
 ACRectangularPowerFlow{LevenbergMarquardtACPowerFlow}()  # rectangular + LM
 ACMixedPowerFlow()                                  # MCPB + Newton-Raphson (default)
-ACMixedPowerFlow{LevenbergMarquardtACPowerFlow}()   # MCPB + LM (scales better than Rect/LM)
+ACMixedPowerFlow{LevenbergMarquardtACPowerFlow}()   # MCPB + LM
 ```
 
 Any (formulation, solver) pair is valid except where noted:
@@ -127,8 +127,7 @@ solver is just data.
     default Newton-Raphson run does not converge, escalate to
     [`TrustRegionACPowerFlow`](@ref), then [`LevenbergMarquardtACPowerFlow`](@ref),
     then [`RobustHomotopyPowerFlow`](@ref) (polar only), without touching the
-    rest of your setup. For LM on large systems, prefer
-    [`ACMixedPowerFlow`](@ref) over [`ACRectangularPowerFlow`](@ref).
+    rest of your setup.
 
 For benchmark-based selection at scale, see
 [How to choose an AC formulation and solver](@ref choose-ac-formulation-and-solver).

@@ -191,9 +191,7 @@ function _maybe_handoff!(
     solver_name::String,
     stage_iters::Int,
 )
-    converged =
-        norm(residual.Rv, Inf) < tol &&
-        _converged_at_setpoints!(residual, data, sv.x, time_step, tol)
+    converged = _residual_converged!(residual, data, sv.x, time_step, tol)
     return (converged, 0)
 end
 
@@ -210,11 +208,10 @@ function _maybe_handoff!(
     solver_name::String,
     stage_iters::Int,
 )
-    stage_met_tol =
-        norm(residual.Rv, Inf) < tol &&
-        _converged_at_setpoints!(residual, data, sv.x, time_step, tol)
-    stage_met_tol && return (stage_met_tol, 0)
-    J(data, time_step)           # refresh Jacobian VALUES at the stage state
+    if _residual_converged!(residual, data, sv.x, time_step, tol)
+        return (true, 0)
+    end
+    J(data, time_step)
     if handoff_solver === LevenbergMarquardtACPowerFlow
         # LM's inner method takes the raw state vector + an LMWorkspace (a different signature
         # from NR/TR) and mutates x0 in place; see src/levenberg-marquardt.jl.

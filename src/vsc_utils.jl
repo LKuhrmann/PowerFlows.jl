@@ -1111,10 +1111,10 @@ function _apply_vsc_bus_injections_mixed!(
     return
 end
 
-# VSC Jacobian bus entries for the MCPB rows. `imag_first_pq = true` selects the MCPB layout:
-# imag-first current rows at PQ buses, and the power and pin rows at PV buses.
+# VSC Jacobian bus entries for the mixed rows: imag-first current rows at PQ buses, and the
+# power and pin rows at PV buses.
 # [`_set_vsc_tail_entries_rect!`](@ref) writes the control and DC-KCL tail rows.
-function _set_entries_for_vsc_rect_mcpb!(
+function _set_entries_for_vsc_mixed!(
     Jvnz::Vector{Float64},
     diag_base_nz::Matrix{Int},
     vsc_nz::VSCJacobianNZCache,
@@ -1123,7 +1123,6 @@ function _set_entries_for_vsc_rect_mcpb!(
     f_state::Vector{Float64},
     bus_types::AbstractVector,
     time_step::Int,
-    imag_first_pq::Bool,
 )
     conv = vsc_nz.conv
     @inbounds for c in 1:n_vsc_converters(dcn)
@@ -1149,15 +1148,15 @@ function _set_entries_for_vsc_rect_mcpb!(
             Jvnz[conv[2, c]] = f / D
             Jvnz[conv[3, c]] = f / D
             Jvnz[conv[4, c]] = -e / D
-        elseif imag_first_pq && bt == PSY.ACBusTypes.PV
-            # MCPB PV rows are (real-power balance, |V|² pin): the converter contributes −P_c to
+        elseif bt == PSY.ACBusTypes.PV
+            # PV rows are (real-power balance, |V|² pin): the converter contributes −P_c to
             # the power row (constant in e,f — no diag coupling) and nothing to the pin row.
             Jvnz[conv[1, c]] = -1.0
             Jvnz[conv[2, c]] = 0.0
             Jvnz[conv[3, c]] = 0.0
             Jvnz[conv[4, c]] = 0.0
-        elseif imag_first_pq && bt == PSY.ACBusTypes.PQ
-            # imag-first (MCPB PQ): F[off] = Ii, F[off+1] = Ir
+        else  # PQ
+            # imag-first: F[off] = Ii, F[off+1] = Ir
             Jvnz[diag_base_nz[1, ix]] += dIi_de
             Jvnz[diag_base_nz[2, ix]] += dIi_df
             Jvnz[diag_base_nz[3, ix]] += dIr_de
@@ -1166,16 +1165,6 @@ function _set_entries_for_vsc_rect_mcpb!(
             Jvnz[conv[2, c]] = -e / D
             Jvnz[conv[3, c]] = e / D
             Jvnz[conv[4, c]] = f / D
-        else
-            # real-first current rows: F[off] = Ir, F[off+1] = Ii
-            Jvnz[diag_base_nz[1, ix]] += dIr_de
-            Jvnz[diag_base_nz[2, ix]] += dIr_df
-            Jvnz[diag_base_nz[3, ix]] += dIi_de
-            Jvnz[diag_base_nz[4, ix]] += dIi_df
-            Jvnz[conv[1, c]] = e / D
-            Jvnz[conv[2, c]] = f / D
-            Jvnz[conv[3, c]] = f / D
-            Jvnz[conv[4, c]] = -e / D
         end
     end
     _set_vsc_tail_entries_rect!(Jvnz, vsc_nz, dcn, e_state, f_state, bus_types, time_step)

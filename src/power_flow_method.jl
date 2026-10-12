@@ -1135,8 +1135,7 @@ function _simple_step(time_step::Int,
         refinement_eps,
     )
     # update x
-    stateVector.x .+= stateVector.Δx_nr
-    _project_pv_setpoints!(residual, data, stateVector.x, stateVector.Δx_nr, time_step)
+    _advance_x!(residual, data, stateVector.x, stateVector.Δx_nr, time_step)
     # update data's fields (the bus angles/voltages) to match x, and update the residual.
     J_filled = _residual_at_step!(residual, J, data, stateVector.x, time_step)
     return J_filled, factored
@@ -1169,8 +1168,7 @@ function _chord_step!(time_step::Int,
     copyto!(stateVector.r, residual.Rv)
     _solve_Δx_nr!(stateVector, linSolveCache)
     stateVector.Δx_nr .= .-stateVector.Δx_nr
-    stateVector.x .+= stateVector.Δx_nr
-    _project_pv_setpoints!(residual, data, stateVector.x, stateVector.Δx_nr, time_step)
+    _advance_x!(residual, data, stateVector.x, stateVector.Δx_nr, time_step)
     residual(data, stateVector.x, time_step)
     new_norm = norm(residual.Rv, Inf)
     if new_norm <= CHORD_CONTRACTION * residual_norm || new_norm < tol
@@ -1240,8 +1238,7 @@ function _iwamoto_step(time_step::Int,
         refinement_eps,
     )
     # Take full trial step: x += Δx_nr
-    stateVector.x .+= stateVector.Δx_nr
-    _project_pv_setpoints!(residual, data, stateVector.x, stateVector.Δx_nr, time_step)
+    _advance_x!(residual, data, stateVector.x, stateVector.Δx_nr, time_step)
     # Evaluate trial residual b = F(x + Δx), and J there when the kernel is fused.
     J_filled = _residual_at_step!(residual, J, data, stateVector.x, time_step)
 
@@ -1262,8 +1259,7 @@ function _iwamoto_step(time_step::Int,
     # Undo full step and apply damped step.
     stateVector.x .-= stateVector.Δx_nr
     stateVector.Δx_nr .*= μ
-    stateVector.x .+= stateVector.Δx_nr
-    _project_pv_setpoints!(residual, data, stateVector.x, stateVector.Δx_nr, time_step)
+    _advance_x!(residual, data, stateVector.x, stateVector.Δx_nr, time_step)
     # Re-evaluate residual at damped point.
     residual(data, stateVector.x, time_step)
     # Check whether the damped step actually improved the residual.
@@ -1370,8 +1366,7 @@ function _run_power_flow_method(time_step::Int,
             if accepted
                 Threads.atomic_add!(_CHORD_STEPS, 1)
                 converged =
-                    residual_norm < tol &&
-                    _converged_at_setpoints!(residual, data, stateVector.x, time_step, tol)
+                    _residual_converged!(residual, data, stateVector.x, time_step, tol)
                 converged && keep_converged_J && J(data, time_step)
                 validate_vms && !converged &&
                     _validate_state_magnitudes(
@@ -1420,8 +1415,7 @@ function _run_power_flow_method(time_step::Int,
         end
         residual_norm = norm(residual.Rv, Inf)
         converged =
-            residual_norm < tol &&
-            _converged_at_setpoints!(residual, data, stateVector.x, time_step, tol)
+            _residual_converged!(residual, data, stateVector.x, time_step, tol)
         # A NaN or Inf iterate stays non-finite: every further step is wasted work.
         isfinite(residual_norm) || break
         # A reverted Iwamoto step leaves J at the restored x.
@@ -1523,8 +1517,7 @@ function _run_power_flow_method(time_step::Int,
                 return false, i
         end
         converged =
-            norm(residual.Rv, Inf) < tol &&
-            _converged_at_setpoints!(residual, data, stateVector.x, time_step, tol)
+            _residual_converged!(residual, data, stateVector.x, time_step, tol)
         if !converged
             validate_vms && _validate_state_magnitudes(
                 residual,

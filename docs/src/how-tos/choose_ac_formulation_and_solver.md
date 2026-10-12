@@ -48,10 +48,6 @@ median is the representative figure.
 
   - **Default / general use:** [`ACPowerFlow`](@ref)`()` (Polar + NR). Well-trodden and
     the reference all other formulations are validated against.
-  - **Fastest at scale:** [`ACRectangularPowerFlow`](@ref)`{NewtonRaphsonACPowerFlow}`
-    or `{TrustRegionACPowerFlow}` — ~15% faster than Polar/NR by median in the
-    tables above (2000 and 10k bus alike); [`ACMixedPowerFlow`](@ref) with NR/TR
-    is within a few percent of it.
   - **Most robust (poor start, ill-conditioned, high-impedance):**
     [`TrustRegionACPowerFlow`](@ref) on any formulation — its median is on par
     with NR at every size while globalizing the step. For cases that still will
@@ -62,10 +58,8 @@ median is the representative figure.
   - **Levenberg-Marquardt:** a robust least-squares fallback, the slowest per
     iteration (it refactorizes a sparse augmented system every step) and the
     highest variance — prefer NR/TR and reach for LM only when they stall. If
-    you need LM, use **Mixed/LM** (the only LM that scales: 3–5 iterations and
-    the lowest LM median at every size) or Polar/LM. **Avoid Rectangular/LM at
-    scale**: its Marquardt scaling helps at ≤2000 buses (7 iters) but does not
-    scale — 56 iterations / 4.3 s at 10k, ~20× Rectangular/NR. See
+    you need LM, use **Mixed/LM** (3–5 iterations and the lowest LM median at
+    every size in the tables above) or Polar/LM. See
     [Levenberg-Marquardt in Place of Gauss-Seidel](@ref).
   - **Repeated / many solves (PCM, contingency screening, dynamic-sim init):**
     [`FastDecoupledACPowerFlow`](@ref) — the fast decoupled power flow (PSS/E `FDNS`). It is a

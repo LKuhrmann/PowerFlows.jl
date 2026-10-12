@@ -26,7 +26,6 @@ start like the polar form.
   (multi-swing); precomputed once here (bus REF-status is fixed across a solve)
   so the hot per-iteration path never allocates a `Set`.
 - `bus_state_offset::Vector{REC_INDEX_TYPE}`
-- `bus_block_size::Vector{Int8}`
 - `total_bus_state::Int`
 - `validate_offsets::Vector{Int}` — precomputed `x`-offsets of PQ/PV buses for
   the per-iteration voltage-magnitude diagnostic
@@ -35,6 +34,7 @@ start like the polar form.
 - `P_eff_cache`, `Q_eff_cache` — per-bus specified net injection of the last evaluation
 - `Ir_acc`, `Ii_acc` — per-bus network current `Re/Im(Y_bus_eff·V + Y_lcc·V)` of the last
   evaluation, read by the Jacobian and by [`rect_finalize_bus_injections!`](@ref)
+- `x_set` — scratch copy of the state for `_converged_at_setpoints!`
 """
 struct ACRectangularCIResidual
     Rv::Vector{Float64}
@@ -48,7 +48,6 @@ struct ACRectangularCIResidual
     subnetworks::Dict{Int64, Vector{Int64}}
     independent_ref::Set{Int}
     bus_state_offset::Vector{REC_INDEX_TYPE}
-    bus_block_size::Vector{Int8}
     total_bus_state::Int
     validate_offsets::Vector{Int}
     e_state::Vector{Float64}
@@ -57,6 +56,7 @@ struct ACRectangularCIResidual
     Q_eff_cache::Vector{Float64}
     Ir_acc::Vector{Float64}
     Ii_acc::Vector{Float64}
+    x_set::Vector{Float64}
 end
 
 function ACRectangularCIResidual(data::ACPowerFlowData, time_step::Int64)
@@ -64,7 +64,7 @@ function ACRectangularCIResidual(data::ACPowerFlowData, time_step::Int64)
     n_lccs = size(data.lcc.p_set, 1)
     bus_type = view(data.bus_type, :, time_step)
 
-    offsets, block_sizes, total_bus_state = compute_bus_state_offsets(bus_type)
+    offsets, total_bus_state = compute_bus_state_offsets(bus_type)
     validate_offsets = _pqpv_validate_offsets(bus_type, offsets)
     total_state = total_bus_state + state_tail_length(data, get_dc_network(data))
 
@@ -119,7 +119,6 @@ function ACRectangularCIResidual(data::ACPowerFlowData, time_step::Int64)
         subnetworks,
         independent_ref,
         offsets,
-        block_sizes,
         total_bus_state,
         validate_offsets,
         Vector{Float64}(undef, n_buses),
@@ -128,6 +127,7 @@ function ACRectangularCIResidual(data::ACPowerFlowData, time_step::Int64)
         Vector{Float64}(undef, n_buses),
         Vector{Float64}(undef, n_buses),
         Vector{Float64}(undef, n_buses),
+        Vector{Float64}(undef, total_state),
     )
 end
 
@@ -183,7 +183,7 @@ function _update_rect_ci_residual_values!(
     bus_types = view(data.bus_type, :, time_step)
 
     # 1) Push state into data (only PQ updates bus_magnitude; PV preserves V_set).
-    rect_update_data!(data, x, bus_state_offset, R.bus_block_size, time_step)
+    rect_update_data!(data, x, bus_state_offset, time_step)
     # Populate state caches before LCC admittance refresh (LCC needs |V_state|).
     @inbounds for i in 1:n_buses
         off = Int(bus_state_offset[i])

@@ -1,13 +1,12 @@
 """
     compute_bus_state_offsets(bus_type)
 
-Per-bus state-vector offsets and block sizes for the rectangular power-mismatch
-formulation. Every bus occupies 2 slots: `(e, f)` at PQ and PV, `(P_net, Q_net)` at REF.
+Per-bus state-vector offsets. Every bus occupies 2 slots.
 
-Returns `(offsets, block_sizes, total_bus_state)` where
+Returns `(offsets, total_bus_state)` where
 - `offsets[i]` is the 1-based start index of bus `i`'s block in the state vector
-- `offsets[end]` is the start of the LCC tail (`== total_bus_state + 1`)
-- `block_sizes[i] == 2`
+- `offsets[end]` is the start of the tail, which holds the LCC and VSC states
+  (`== total_bus_state + 1`)
 - `total_bus_state` is the total count of bus-state slots (excluding the tail)
 """
 function compute_bus_state_offsets(
@@ -15,11 +14,10 @@ function compute_bus_state_offsets(
 )
     n_buses = length(bus_type)
     offsets = Vector{REC_INDEX_TYPE}(undef, n_buses + 1)
-    block_sizes = fill(Int8(2), n_buses)
     for i in 1:(n_buses + 1)
         offsets[i] = REC_INDEX_TYPE(2 * i - 1)
     end
-    return offsets, block_sizes, 2 * n_buses
+    return offsets, 2 * n_buses
 end
 
 """
@@ -87,7 +85,8 @@ function _rect_fill_state!(
         end
     end
     n_lccs = size(data.lcc.p_set, 1)
-    # State-vector layout. The full state is `[bus_block_1 ; … ; bus_block_N ; LCC_tail]`.
+    # State-vector layout. The full state is
+    # `[bus_block_1 ; … ; bus_block_N ; LCC_tail ; VSC_tail]`.
     # The bus blocks occupy slots `1 .. total_bus_state`; the LCC tail starts at
     # `total_bus_state + 1`. Each line-commutated converter (LCC) — a two-terminal HVDC
     # link with a rectifier (AC→DC) on one end and an inverter (DC→AC) on the other —
@@ -120,7 +119,7 @@ function _rect_fill_state!(
 end
 
 """
-    rect_initial_state!(x, data, bus_state_offset, bus_block_size, time_step)
+    rect_initial_state!(x, data, bus_state_offset, time_step)
 
 Initialize the state vector `x` from `data.bus_magnitude`, `data.bus_angles`,
 and the bus power-injection fields, plus the LCC tap/angle fields. Counterpart
@@ -131,7 +130,6 @@ function rect_initial_state!(
     x::Vector{Float64},
     data::ACPowerFlowData,
     bus_state_offset::Vector{REC_INDEX_TYPE},
-    bus_block_size::Vector{Int8},
     time_step::Int64,
 )
     _rect_fill_state!(x, data, bus_state_offset, time_step, time_step)
@@ -139,7 +137,7 @@ function rect_initial_state!(
 end
 
 """
-    rect_update_data!(data, x, bus_state_offset, bus_block_size, time_step)
+    rect_update_data!(data, x, bus_state_offset, time_step)
 
 Write the state-derived voltage fields (`bus_magnitude`, `bus_angles`) and
 LCC taps/angles from `x` back into `data`. Per-iteration helper invoked by
@@ -157,7 +155,6 @@ function rect_update_data!(
     data::ACPowerFlowData,
     x::Vector{Float64},
     bus_state_offset::Vector{REC_INDEX_TYPE},
-    bus_block_size::Vector{Int8},
     time_step::Int64,
 )
     bus_types = view(data.bus_type, :, time_step)

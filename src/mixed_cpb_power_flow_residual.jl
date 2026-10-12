@@ -2,8 +2,6 @@
     struct ACMixedCPBResidual
 
 Residual functor for the mixed current/power-balance (MCPB) AC power flow.
-Mirrors [`ACRectangularCIResidual`](@ref) 1:1, but every bus uses a 2-slot
-block (no PV→3 expansion).
 
 Non-obvious fields: `Y_bus_eff` folds in ZIP constant-Z; `P_net_const`/
 `Q_net_const` are the |V|-independent net injections; `const_I_P`/`const_I_Q`
@@ -27,7 +25,6 @@ struct ACMixedCPBResidual
     subnetworks::Dict{Int64, Vector{Int64}}
     independent_ref::Set{Int}
     bus_state_offset::Vector{REC_INDEX_TYPE}
-    bus_block_size::Vector{Int8}
     total_bus_state::Int
     validate_offsets::Vector{Int}
     # State caches mirrored from x at each residual evaluation. The Jacobian
@@ -42,6 +39,7 @@ struct ACMixedCPBResidual
     # aliased by the MCPB Jacobian (the PV power row needs e·Ir + f·Ii).
     Ir_acc::Vector{Float64}             # length n_buses; accumulated Re(I)
     Ii_acc::Vector{Float64}             # length n_buses; accumulated Im(I)
+    x_set::Vector{Float64}              # length of x; `_converged_at_setpoints!` scratch
 end
 
 function ACMixedCPBResidual(data::ACPowerFlowData, time_step::Int64)
@@ -49,7 +47,7 @@ function ACMixedCPBResidual(data::ACPowerFlowData, time_step::Int64)
     n_lccs = size(data.lcc.p_set, 1)
     bus_type = view(data.bus_type, :, time_step)
 
-    offsets, block_sizes, total_bus_state = compute_mixed_bus_state_offsets(bus_type)
+    offsets, total_bus_state = compute_bus_state_offsets(bus_type)
     validate_offsets = _pqpv_validate_offsets(bus_type, offsets)
     total_state = total_bus_state + state_tail_length(data, get_dc_network(data))
 
@@ -104,7 +102,6 @@ function ACMixedCPBResidual(data::ACPowerFlowData, time_step::Int64)
         subnetworks,
         independent_ref,
         offsets,
-        block_sizes,
         total_bus_state,
         validate_offsets,
         Vector{Float64}(undef, n_buses),
@@ -113,6 +110,7 @@ function ACMixedCPBResidual(data::ACPowerFlowData, time_step::Int64)
         Vector{Float64}(undef, n_buses),
         Vector{Float64}(undef, n_buses),
         Vector{Float64}(undef, n_buses),
+        Vector{Float64}(undef, total_state),
     )
 end
 
@@ -125,7 +123,7 @@ function (R::ACMixedCPBResidual)(
     _update_mixed_cpb_residual_values!(R.Rv, x, R.Y_bus_eff, R.P_net_const, R.Q_net_const,
         R.const_I_P, R.const_I_Q, R.P_net_set,
         R.bus_slack_participation_factors, R.subnetworks, R.independent_ref,
-        R.bus_state_offset, R.bus_block_size, R.total_bus_state,
+        R.bus_state_offset, R.total_bus_state,
         R.e_state, R.f_state, R.P_eff_cache, R.Q_eff_cache,
         data, time_step, R.Ir_acc, R.Ii_acc)
     copyto!(Rv, R.Rv)
@@ -140,20 +138,18 @@ function (R::ACMixedCPBResidual)(
     _update_mixed_cpb_residual_values!(R.Rv, x, R.Y_bus_eff, R.P_net_const, R.Q_net_const,
         R.const_I_P, R.const_I_Q, R.P_net_set,
         R.bus_slack_participation_factors, R.subnetworks, R.independent_ref,
-        R.bus_state_offset, R.bus_block_size, R.total_bus_state,
+        R.bus_state_offset, R.total_bus_state,
         R.e_state, R.f_state, R.P_eff_cache, R.Q_eff_cache,
         data, time_step, R.Ir_acc, R.Ii_acc)
     return
 end
 
 """
-Update MCPB residual `F` (paper §IV). Mirrors
-[`_update_rect_ci_residual_values!`](@ref) step-for-step. Network current
-`Y_bus_eff·V` (+ LCC) is accumulated into per-bus `Ir_acc`/`Ii_acc` (not
-subtracted into `F`), keeping rect's `residual = I_spec − I_network` sign so
-the Jacobian mirrors rect. Per-bus blocks are 2 slots: PQ = divided-current
-balance, imag-first (so nonzero `B_ii` lands on the block diagonal); PV = eq.7
-power balance then eq.8 `|V|² − V_set²`; REF = rect's REF branch verbatim.
+Update MCPB residual `F` (paper §IV). Network current `Y_bus_eff·V` (+ LCC) is
+accumulated into per-bus `Ir_acc`/`Ii_acc`. The current rows use the sign
+`I_spec − I_network`. Per-bus blocks are 2 slots: PQ = divided-current balance,
+imag-first (so nonzero `B_ii` lands on the block diagonal); PV = eq.7 power
+balance then eq.8 `|V|² − V_set²`; REF = divided-current balance, real-first.
 """
 function _update_mixed_cpb_residual_values!(
     F::Vector{Float64},
@@ -168,7 +164,6 @@ function _update_mixed_cpb_residual_values!(
     subnetworks::Dict{Int64, Vector{Int64}},
     independent_ref::Set{Int},
     bus_state_offset::Vector{REC_INDEX_TYPE},
-    bus_block_size::Vector{Int8},
     total_bus_state::Int,
     e_state::Vector{Float64},
     f_state::Vector{Float64},
@@ -185,7 +180,7 @@ function _update_mixed_cpb_residual_values!(
 
     # 1) Push state into data (MCPB: PQ updates bus_magnitude; PV/REF preserve
     #    V_set). Populate state caches before LCC admittance refresh.
-    mixed_update_data!(data, x, bus_state_offset, bus_block_size, time_step)
+    mixed_update_data!(data, x, bus_state_offset, time_step)
     @inbounds for i in 1:n_buses
         off = Int(bus_state_offset[i])
         bt = bus_types[i]
@@ -227,8 +222,6 @@ function _update_mixed_cpb_residual_values!(
     end
 
     # 3) Accumulate +I_network = Y_bus_eff·V into Ir_acc/Ii_acc (NOT into F).
-    #    rect subtracts -Re/Im(Y·V) into F; MCPB accumulates the POSITIVE
-    #    current here, and the residual is I_spec − I_network below.
     fill!(Ir_acc, 0.0)
     fill!(Ii_acc, 0.0)
     Yvals = SparseArrays.nonzeros(Y_bus_eff)
@@ -271,8 +264,8 @@ function _update_mixed_cpb_residual_values!(
         f_i = f_state[i]
         D = max(e_i^2 + f_i^2, V_FLOOR2)
         if bt == PSY.ACBusTypes.REF
-            # REF: copied VERBATIM from rect's REF branch (slots NOT swapped)
-            # so rect's `_update_ref_diag_block!` is reusable.
+            # REF: current balance, real-first (slots NOT swapped), as
+            # `_update_ref_diag_block!` expects.
             if i in independent_ref
                 # Multi-swing island: this swing self-balances at its own P-slot
                 # (∂P_net_cp/∂x[off] = 1), not the distributed c_ref share.
@@ -295,9 +288,8 @@ function _update_mixed_cpb_residual_values!(
             V_set_sq = data.bus_magnitude[i, time_step]^2
             F[off + 1] = (e_i^2 + f_i^2) - V_set_sq
         else  # PQ
-            # PQ: divided-current balance, IMAG-FIRST ordering (paper §IV) —
-            # rect's two PQ rows with the two slots SWAPPED so nonzero B_ii
-            # lands on the block diagonal.
+            # PQ: divided-current balance, IMAG-FIRST ordering (paper §IV), so
+            # nonzero B_ii lands on the block diagonal.
             P_i = P_eff_cache[i]
             Q_i = Q_eff_cache[i]
             F[off] = (P_i * f_i - Q_i * e_i) / D - Ii_acc[i]   # imag → slot 0
@@ -329,8 +321,9 @@ end
 """
     _converged_at_setpoints!(residual, data, x, time_step, tol) -> Bool
 
-Called once `‖F(x)‖∞ < tol`. The published PV magnitude is the setpoint, not `|e + jf|`, so
-the rectangular and mixed forms re-check the residual with every PV `(e, f)` scaled onto it.
+Called once `‖F(x)‖∞ < tol` (see `_residual_converged!`). The published PV magnitude is the
+setpoint, not `|e + jf|`, so the rectangular and mixed forms re-check the residual with every
+PV `(e, f)` scaled onto it.
 On success `x` and `residual` are left at that state; otherwise both are restored.
 """
 _converged_at_setpoints!(
@@ -340,6 +333,29 @@ _converged_at_setpoints!(
     ::Int64,
     ::Float64,
 ) = true
+
+"""
+    _residual_converged!(residual, data, x, time_step, tol) -> Bool
+
+Return `true` when `‖F(x)‖∞ < tol` and `_converged_at_setpoints!` accepts `x`.
+"""
+function _residual_converged!(
+    residual::Union{ACPowerFlowResidual, ACRectangularCIResidual, ACMixedCPBResidual},
+    data::ACPowerFlowData,
+    x::Vector{Float64},
+    time_step::Int64,
+    tol::Float64,
+)
+    return norm(residual.Rv, Inf) < tol &&
+           _converged_at_setpoints!(residual, data, x, time_step, tol)
+end
+
+@inline function _scale_onto_setpoint!(x::Vector{Float64}, off::Int, v_set::Float64)
+    scale = v_set / hypot(x[off], x[off + 1])
+    x[off] *= scale
+    x[off + 1] *= scale
+    return
+end
 
 # The PV row holds e² + f² only to `tol`. Near a low-impedance branch, that gap moves the
 # neighbouring rows by orders of magnitude more.
@@ -351,13 +367,12 @@ function _converged_at_setpoints!(
     tol::Float64,
 )
     bus_types = view(data.bus_type, :, time_step)
-    x_set = copy(x)
+    x_set = residual.x_set
+    copyto!(x_set, x)
     for i in eachindex(bus_types)
         bus_types[i] == PSY.ACBusTypes.PV || continue
         off = Int(residual.bus_state_offset[i])
-        scale = data.bus_magnitude[i, time_step] / hypot(x[off], x[off + 1])
-        x_set[off] *= scale
-        x_set[off + 1] *= scale
+        _scale_onto_setpoint!(x_set, off, data.bus_magnitude[i, time_step])
     end
     residual(data, x_set, time_step)
     if norm(residual.Rv, Inf) < tol
@@ -408,13 +423,28 @@ function _project_pv_setpoints!(
         abs(vm - v_set) > PV_PROJECTION_THRESHOLD * v_set || continue
         # No angle to keep at the origin; the next step moves the bus off it.
         iszero(vm) && continue
-        scale = v_set / vm
-        e = x[off] * scale
-        f = x[off + 1] * scale
-        Δx[off] += e - x[off]
-        Δx[off + 1] += f - x[off + 1]
-        x[off] = e
-        x[off + 1] = f
+        e_old = x[off]
+        f_old = x[off + 1]
+        _scale_onto_setpoint!(x, off, v_set)
+        Δx[off] += x[off] - e_old
+        Δx[off + 1] += x[off + 1] - f_old
     end
+    return
+end
+
+"""
+    _advance_x!(residual, data, x, Δx, time_step)
+
+Apply `x .+= Δx`, then `_project_pv_setpoints!`.
+"""
+function _advance_x!(
+    residual::Union{ACPowerFlowResidual, ACRectangularCIResidual, ACMixedCPBResidual},
+    data::ACPowerFlowData,
+    x::Vector{Float64},
+    Δx::Vector{Float64},
+    time_step::Int64,
+)
+    x .+= Δx
+    _project_pv_setpoints!(residual, data, x, Δx, time_step)
     return
 end

@@ -1,34 +1,4 @@
 """
-    compute_mixed_bus_state_offsets(bus_type)
-
-Per-bus state-vector offsets and block sizes for MCPB. Every bus occupies 2
-slots (no PV→3 expansion). Returns `(offsets, block_sizes, total_bus_state)`:
-`offsets[i]` is bus `i`'s 1-based block start, `offsets[end]` the LCC-tail
-start (`== total_bus_state + 1`), `block_sizes[i] == 2`.
-"""
-function compute_mixed_bus_state_offsets(
-    bus_type::AbstractVector{PSY.ACBusTypes.Value},
-)
-    n_buses = length(bus_type)
-    offsets = Vector{REC_INDEX_TYPE}(undef, n_buses + 1)
-    block_sizes = Vector{Int8}(undef, n_buses)
-    # MCPB has no PV→3 expansion, so block size is provably 2 for every bus
-    # (PQ, PV, REF), `offsets[i] == 2i-1`, and `total_bus_state == 2*n_buses`.
-    # These arrays are therefore redundant for MCPB itself; they are kept only
-    # for signature parity with the variable-block rectangular-CI formulation
-    # this code mirrors 1:1, so shared helpers and cross-formulation test
-    # parity stay mechanical. Do not "optimize" them away in isolation.
-    fill!(block_sizes, Int8(2))
-    pos = REC_INDEX_TYPE(1)
-    for i in 1:n_buses
-        offsets[i] = pos
-        pos += REC_INDEX_TYPE(2)
-    end
-    offsets[n_buses + 1] = pos
-    return offsets, block_sizes, Int(pos - 1)
-end
-
-"""
     _mixed_fill_state!(x, data, bus_state_offset, type_time_step, value_time_step)
 
 Fill the MCPB state vector `x`: block layout from
@@ -56,7 +26,7 @@ function _mixed_fill_state!(
                 data.bus_reactive_power_injections[i, value_time_step] -
                 data.bus_reactive_power_withdrawals[i, value_time_step]
         else
-            # MCPB: both PV and PQ use 2 state slots (e, f); no Q slot (unlike rectangular CI).
+            # PV and PQ both hold (e, f).
             Vm = data.bus_magnitude[i, value_time_step]
             θ = data.bus_angles[i, value_time_step]
             x[off] = Vm * cos(θ)
@@ -90,7 +60,7 @@ function _mixed_fill_state!(
 end
 
 """
-    mixed_initial_state!(x, data, bus_state_offset, bus_block_size, time_step)
+    mixed_initial_state!(x, data, bus_state_offset, time_step)
 
 Initialize the MCPB state vector `x` (flat start) from `data`. REF slots hold
 `(P_gen, Q_gen)`; all other buses hold `(e, f)`. Counterpart of
@@ -100,7 +70,6 @@ function mixed_initial_state!(
     x::Vector{Float64},
     data::ACPowerFlowData,
     bus_state_offset::Vector{REC_INDEX_TYPE},
-    bus_block_size::Vector{Int8},
     time_step::Int64,
 )
     _mixed_fill_state!(x, data, bus_state_offset, time_step, time_step)
@@ -108,7 +77,7 @@ function mixed_initial_state!(
 end
 
 """
-    mixed_update_data!(data, x, bus_state_offset, bus_block_size, time_step)
+    mixed_update_data!(data, x, bus_state_offset, time_step)
 
 Write state-derived voltages and LCC taps/angles from `x` back into `data`
 (per-iteration). Does NOT write power injections: at REF `x[off]` carries the
@@ -120,7 +89,6 @@ function mixed_update_data!(
     data::ACPowerFlowData,
     x::Vector{Float64},
     bus_state_offset::Vector{REC_INDEX_TYPE},
-    bus_block_size::Vector{Int8},
     time_step::Int64,
 )
     bus_types = view(data.bus_type, :, time_step)
@@ -219,6 +187,17 @@ function mixed_finalize_bus_injections!(
             end
         end
     end
+    # The converter injection is in Y·V but not in the polar P/Q state: remove it at REF/PV buses.
+    vsc_p = zeros(Float64, n_buses)
+    vsc_q = zeros(Float64, n_buses)
+    dcn = get_dc_network(data)
+    for c in 1:n_vsc_converters(dcn)
+        ix = dcn.converter_ac_bus_ix[c]
+        if bus_types[ix] == PSY.ACBusTypes.REF || bus_types[ix] == PSY.ACBusTypes.PV
+            vsc_p[ix] += dcn.p_c[c, time_step]
+            vsc_q[ix] += dcn.q_c[c, time_step]
+        end
+    end
     for (ref_bus, subnetwork_buses) in subnetworks
         # pass 1: total slack. Buffer covers ALL REF/PV buses (pass 2 writes
         # even non-participating c_k==0 ones); slack accumulates only for c_k!=0.
@@ -243,12 +222,13 @@ function mixed_finalize_bus_injections!(
             # can carry c_k == 0 and still needs its physically-solved P in pass 2.
             if bus_k in independent_ref
                 P_net_k_buf[idx] =
-                    e_state[bus_k] * YVr[bus_k] + f_state[bus_k] * YVi[bus_k]
+                    e_state[bus_k] * YVr[bus_k] + f_state[bus_k] * YVi[bus_k] - vsc_p[bus_k]
                 continue
             end
             bus_slack_participation_factors[bus_k] == 0.0 && continue
             # S_net,k = V_k · conj((Y_raw·V)_k); real part used here.
-            P_net_k = e_state[bus_k] * YVr[bus_k] + f_state[bus_k] * YVi[bus_k]
+            P_net_k =
+                e_state[bus_k] * YVr[bus_k] + f_state[bus_k] * YVi[bus_k] - vsc_p[bus_k]
             P_net_k_buf[idx] = P_net_k
             P_slack_total += P_net_k - P_net_set_polar_k
         end
@@ -264,7 +244,7 @@ function mixed_finalize_bus_injections!(
                 P_net_set_polar[idx] + c_k * P_slack_total
             end
             # Q_net,k = imag(V_k · conj((Y_raw·V)_k)).
-            Q_net = f_state[bus_k] * YVr[bus_k] - e_state[bus_k] * YVi[bus_k]
+            Q_net = f_state[bus_k] * YVr[bus_k] - e_state[bus_k] * YVi[bus_k] - vsc_q[bus_k]
             # Identical to polar `_setpq`.
             data.bus_active_power_injections[bus_k, time_step] =
                 P_net +

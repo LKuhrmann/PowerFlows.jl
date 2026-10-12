@@ -58,7 +58,7 @@ end
 
     x0 = Vector{Float64}(undef, length(residual.Rv))
     PF.mixed_initial_state!(
-        x0, data, residual.bus_state_offset, residual.bus_block_size, 1,
+        x0, data, residual.bus_state_offset, 1,
     )
     residual(data, x0, 1)
     # The hard fixture must actually trip the LARGE_RESIDUAL gate so the
@@ -151,7 +151,7 @@ end
     # Cold flat start for step 2 (reads the perturbed step-2 data).
     cold = Vector{Float64}(undef, length(residual.Rv))
     PF.mixed_initial_state!(
-        cold, data, residual.bus_state_offset, residual.bus_block_size, 2,
+        cold, data, residual.bus_state_offset, 2,
     )
     residual(data, cold, 2)
     cold_norm = norm(residual.Rv, 1)
@@ -174,7 +174,7 @@ end
 
     x0 = Vector{Float64}(undef, length(residual.Rv))
     PF.mixed_initial_state!(
-        x0, data, residual.bus_state_offset, residual.bus_block_size, 1,
+        x0, data, residual.bus_state_offset, 1,
     )
     # Drive a non-REF bus to a degenerate (e,f). Two sub-cases: a near-zero
     # (e²+f² ≈ 1e-20) and an exactly-zero voltage — the latter makes the
@@ -208,11 +208,7 @@ end
         ACMixedPowerFlow{NewtonRaphsonACPowerFlow}(;
             correct_bustypes = true, solution_parameters = params), sys)
     bt = mixed.bus_type[:, 1]
-    ref = findfirst(==(PSY.ACBusTypes.REF), bt)
-    for i in eachindex(bt)
-        bt[i] == PSY.ACBusTypes.PQ && (mixed.bus_magnitude[i, 1] = 1.0)
-        bt[i] == PSY.ACBusTypes.REF || (mixed.bus_angles[i, 1] = mixed.bus_angles[ref, 1])
-    end
+    ref = flat_start!(mixed)
     @test PF.solve_power_flow!(mixed)
     @test maximum(abs.(mixed.bus_magnitude .- polar.bus_magnitude)) < 1e-7
     θ(d) = d.bus_angles[:, 1] .- d.bus_angles[ref, 1]
@@ -221,7 +217,7 @@ end
     # The shift is folded into the step, so `x .-= Δx` still restores the iterate.
     residual = PF.ACMixedCPBResidual(mixed, 1)
     x = zeros(length(residual.Rv))
-    PF.mixed_initial_state!(x, mixed, residual.bus_state_offset, residual.bus_block_size, 1)
+    PF.mixed_initial_state!(x, mixed, residual.bus_state_offset, 1)
     x_old = copy(x)
     Δx = 0.3 .* x
     x .+= Δx

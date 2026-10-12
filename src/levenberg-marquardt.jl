@@ -243,8 +243,7 @@ function _run_power_flow_method(
                 return false, i
         end
         converged =
-            isfinite(λ) && norm(residual.Rv, Inf) < tol &&
-            _converged_at_setpoints!(residual, data, x, time_step, tol)
+            isfinite(λ) && _residual_converged!(residual, data, x, time_step, tol)
         i += 1
     end
     if !converged

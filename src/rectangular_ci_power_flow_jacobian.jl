@@ -31,8 +31,6 @@ struct ACRectangularCIJacobian
     const_I_Q::Vector{Float64}     # shared view into residual's const_I_Q
     bus_slack_participation_factors::SparseVector{Float64, Int}
     independent_ref::Set{Int}      # shared view into residual's independent_ref
-    bus_state_offset::Vector{REC_INDEX_TYPE}
-    total_bus_state::Int
     yb_nz::Matrix{Int}
     diag_nz::Matrix{Int}
     slack_nz_idx_e::Vector{Int}
@@ -54,8 +52,8 @@ function ACRectangularCIJacobian(
         Y_diag[i] = residual.Y_bus_eff[i, i]
     end
     yb_nz = _build_rect_yb_nz_cache(Jv0, residual.Y_bus_eff, residual.bus_state_offset)
-    diag_nz = _build_mixed_diag_nz_cache(Jv0, residual.bus_state_offset)
-    slack_nz_idx_e, slack_nz_idx_f, _, slack_c_k =
+    diag_nz = _build_diag_nz_cache(Jv0, residual.bus_state_offset)
+    slack_nz_idx_e, slack_nz_idx_f, slack_c_k =
         _build_slack_nz_cache(
             Jv0, residual.bus_state_offset, residual.subnetworks,
             residual.bus_slack_participation_factors, residual.independent_ref,
@@ -81,8 +79,6 @@ function ACRectangularCIJacobian(
         residual.const_I_Q,
         residual.bus_slack_participation_factors,
         residual.independent_ref,
-        residual.bus_state_offset,
-        residual.total_bus_state,
         yb_nz,
         diag_nz,
         slack_nz_idx_e,
@@ -110,6 +106,15 @@ function (J::ACRectangularCIJacobian)(
     return
 end
 
+function _push_block!(rows, cols, vals, r_off::Int, c_off::Int)
+    for r in 0:1, c in 0:1
+        push!(rows, J_INDEX_TYPE(r_off + r))
+        push!(cols, J_INDEX_TYPE(c_off + c))
+        push!(vals, 0.0)
+    end
+    return
+end
+
 """
 Build the sparsity pattern of the rectangular power-mismatch Jacobian: a 2×2 block per bus and
 per Y-bus nonzero (REF columns included, holding structural zeros), the distributed-slack
@@ -130,29 +135,21 @@ function _create_rect_ci_jacobian_structure(
     dcn = get_dc_network(data)
     total_state = total_bus_state + state_tail_length(data, dcn)
 
-    n_entries = 4 * SparseArrays.nnz(Y_bus_eff) + 17 * n_lccs + 4 * n_buses
+    n_entries = 4 * SparseArrays.nnz(Y_bus_eff) + 26 * n_lccs + 4 * n_buses
     sizehint!(rows, n_entries)
     sizehint!(cols, n_entries)
     sizehint!(vals, n_entries)
 
-    function push_block!(r_off::Int, c_off::Int)
-        for r in 0:1, c in 0:1
-            push!(rows, J_INDEX_TYPE(r_off + r))
-            push!(cols, J_INDEX_TYPE(c_off + c))
-            push!(vals, 0.0)
-        end
-        return
-    end
     Yrows = SparseArrays.rowvals(Y_bus_eff)
     @inbounds for col in 1:n_buses
         col_off = Int(bus_state_offset[col])
         # Unconditional: a bus with no stored Y-bus diagonal (an AC-isolated swing, e.g. a
         # DC-tie voltage holder) still needs its own block.
-        push_block!(col_off, col_off)
+        _push_block!(rows, cols, vals, col_off, col_off)
         for j in SparseArrays.nzrange(Y_bus_eff, col)
             row = Yrows[j]
             row == col && continue
-            push_block!(Int(bus_state_offset[row]), col_off)
+            _push_block!(rows, cols, vals, Int(bus_state_offset[row]), col_off)
         end
     end
     # Distributed-slack cross-terms ∂F_k/∂x[ref_off]; a multi-swing island has none.
@@ -538,10 +535,10 @@ function _create_rect_ci_vsc_structure!(
         pc = vsc_off + 2 * c - 1
         qc = vsc_off + 2 * c
         vk = base + k
-        push3(off, pc)       # ∂Ir/∂P_c
-        push3(off, qc)       # ∂Ir/∂Q_c
-        push3(off + 1, pc)   # ∂Ii/∂P_c
-        push3(off + 1, qc)   # ∂Ii/∂Q_c
+        push3(off, pc)       # ∂ΔP/∂P_c
+        push3(off, qc)       # ∂ΔP/∂Q_c
+        push3(off + 1, pc)   # ∂ΔQ/∂P_c
+        push3(off + 1, qc)   # ∂ΔQ/∂Q_c
         push3(pc, pc)        # ∂r1/∂P_c
         push3(pc, vk)        # ∂r1/∂V_dc
         push3(qc, qc)        # ∂r2/∂Q_c
@@ -644,7 +641,7 @@ end
 """
     _build_slack_nz_cache(Jv, bus_state_offset, subnetworks, bus_slack_participation_factors, independent_ref)
 
-Return `(slack_nz_idx_e, slack_nz_idx_f, slack_bus_k, slack_c_k)`. Each entry
+Return `(slack_nz_idx_e, slack_nz_idx_f, slack_c_k)`. Each entry
 corresponds to one (bus_k != ref_bus, c_k != 0) slack cross-term. The nzval
 indices point at `Jv[k_off, ref_off]` and `Jv[k_off+1, ref_off]`. Islands keyed
 by a REF bus in `independent_ref` (multi-swing) are skipped entirely — those
@@ -659,7 +656,6 @@ function _build_slack_nz_cache(
 )
     slack_nz_idx_e = Int[]
     slack_nz_idx_f = Int[]
-    slack_bus_k = Int[]
     slack_c_k = Float64[]
     for (ref_bus, subnetwork_buses) in subnetworks
         ref_bus in independent_ref && continue
@@ -671,11 +667,10 @@ function _build_slack_nz_cache(
             k_off = Int(bus_state_offset[bus_k])
             push!(slack_nz_idx_e, _jv_nz_index(Jv, k_off, ref_off))
             push!(slack_nz_idx_f, _jv_nz_index(Jv, k_off + 1, ref_off))
-            push!(slack_bus_k, bus_k)
             push!(slack_c_k, c_k)
         end
     end
-    return slack_nz_idx_e, slack_nz_idx_f, slack_bus_k, slack_c_k
+    return slack_nz_idx_e, slack_nz_idx_f, slack_c_k
 end
 
 """
@@ -813,27 +808,4 @@ function _build_vsc_nz_cache(
         branch[2 * b] = _jv_nz_index(Jv, base + t, base + f)
     end
     return VSCJacobianNZCache(conv, node, branch)
-end
-
-# MCPB REF block: current-balance rows with `(P_net, Q_net)` columns.
-@inline function _update_ref_diag_block!(
-    Jvnz::Vector{Float64},
-    diag_base_nz::Matrix{Int},
-    i::Int,
-    e_r::Float64,
-    f_r::Float64,
-    c_ref::Float64,
-)
-    # Residual at REF uses P_gen = P_net_set[ref] + c_ref · (x[off] - P_net_set[ref]).
-    # ∂P_gen/∂x[off] = c_ref. So ∂I_spec_r/∂x[off] = c_ref · e_r/V², etc.
-    # For default (c_ref = 1.0), this collapses to the original e_r/V² etc.
-    # V_FLOOR2 floor (see rectangular_ci_power_flow_residual.jl); REF |V| is
-    # fixed near V_set so this never triggers in practice.
-    V_sq = max(e_r^2 + f_r^2, V_FLOOR2)
-    inv_V_sq = 1.0 / V_sq
-    @inbounds Jvnz[diag_base_nz[1, i]] = c_ref * e_r * inv_V_sq
-    @inbounds Jvnz[diag_base_nz[2, i]] = f_r * inv_V_sq
-    @inbounds Jvnz[diag_base_nz[3, i]] = c_ref * f_r * inv_V_sq
-    @inbounds Jvnz[diag_base_nz[4, i]] = -e_r * inv_V_sq
-    return
 end

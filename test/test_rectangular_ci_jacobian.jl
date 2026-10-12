@@ -8,7 +8,7 @@
         R = PF.ACRectangularCIResidual(data, 1)
         J = PF.ACRectangularCIJacobian(data, R, 1)
         x = Vector{Float64}(undef, length(R.Rv))
-        PF.rect_initial_state!(x, data, R.bus_state_offset, R.bus_block_size, 1)
+        PF.rect_initial_state!(x, data, R.bus_state_offset, 1)
         # Avoid verifying at the special converged state — see note in
         # verify_jacobian (test_jacobian.jl) about hidden zeros.
         Random.seed!(42)
@@ -27,7 +27,7 @@
         R = PF.ACRectangularCIResidual(data, 1)
         J = PF.ACRectangularCIJacobian(data, R, 1)
         x = Vector{Float64}(undef, length(R.Rv))
-        PF.rect_initial_state!(x, data, R.bus_state_offset, R.bus_block_size, 1)
+        PF.rect_initial_state!(x, data, R.bus_state_offset, 1)
         Random.seed!(42)
         x .+= 0.02 .* randn(length(x))
         R(data, x, 1)
@@ -58,7 +58,7 @@
         R = PF.ACRectangularCIResidual(data, 1)
         J = PF.ACRectangularCIJacobian(data, R, 1)
         x = Vector{Float64}(undef, length(R.Rv))
-        PF.rect_initial_state!(x, data, R.bus_state_offset, R.bus_block_size, 1)
+        PF.rect_initial_state!(x, data, R.bus_state_offset, 1)
         Random.seed!(7)
         x .+= 0.02 .* randn(length(x))
         R(data, x, 1)
@@ -82,7 +82,7 @@
         R = PF.ACRectangularCIResidual(data, 1)
         J = PF.ACRectangularCIJacobian(data, R, 1)
         x = Vector{Float64}(undef, length(R.Rv))
-        PF.rect_initial_state!(x, data, R.bus_state_offset, R.bus_block_size, 1)
+        PF.rect_initial_state!(x, data, R.bus_state_offset, 1)
         Random.seed!(42)
         x .+= 0.05 .* randn(length(x))
         R(data, x, 1)
@@ -106,7 +106,7 @@ end
     function rect_J(data)
         R = PF.ACRectangularCIResidual(data, 1)
         x = Vector{Float64}(undef, length(R.Rv))
-        PF.rect_initial_state!(x, data, R.bus_state_offset, R.bus_block_size, 1)
+        PF.rect_initial_state!(x, data, R.bus_state_offset, 1)
         R(data, x, 1)
         return PF.ACRectangularCIJacobian(data, R, 1).Jv
     end
@@ -130,7 +130,7 @@ end
     R = PF.ACRectangularCIResidual(data, 1)
     J = PF.ACRectangularCIJacobian(data, R, 1)
     x = Vector{Float64}(undef, length(R.Rv))
-    PF.rect_initial_state!(x, data, R.bus_state_offset, R.bus_block_size, 1)
+    PF.rect_initial_state!(x, data, R.bus_state_offset, 1)
     # Avoid the special converged state (see verify_jacobian note in
     # test_jacobian.jl about hidden zeros).
     Random.seed!(42)
