@@ -193,3 +193,57 @@ end
     J(data, 1)
     @test all(isfinite, SparseArrays.nonzeros(J.Jv))
 end
+
+@testset "Mixed NR flat start: line search reaches the polar root (ACTIVSg2000)" begin
+    sys = PSB.build_system(PSB.MatpowerTestSystems, "matpower_ACTIVSg2000_sys")
+    settings = PF.SolutionParameters(; enhanced_flat_start = false, maxIterations = 30)
+    polar = PF.PowerFlowData(
+        ACPowerFlow{NewtonRaphsonACPowerFlow}(; correct_bustypes = true), sys)
+    @test PF.solve_power_flow!(polar)
+    mixed = PF.PowerFlowData(
+        ACMixedPowerFlow{NewtonRaphsonACPowerFlow}(;
+            correct_bustypes = true, solution_parameters = settings),
+        sys,
+    )
+    flat_start!(mixed)
+    @test PF.solve_power_flow!(mixed)
+    @test mixed.bus_magnitude[:, 1] ≈ polar.bus_magnitude[:, 1] atol = 1e-7
+    @test mixed.bus_angles[:, 1] ≈ polar.bus_angles[:, 1] atol = 1e-7
+end
+
+@testset "Mixed NR line search: a full step that raises ‖F‖ is cut back" begin
+    sys = PSB.build_system(PSB.PSITestSystems, "c_sys14"; add_forecasts = false)
+    pf = ACMixedPowerFlow{NewtonRaphsonACPowerFlow}()
+    data = PF.PowerFlowData(pf, sys)
+    R, J, x0 = PF.initialize_power_flow_variables(pf, data, 1)
+    R(data, x0, 1)
+    J(data, 1)
+    cache = PF.make_linear_solver_cache(PF.PNM.KLUSolver(), J.Jv)
+    PF.symbolic_factor!(cache, J.Jv)
+    sv = PF.StateVectorCache(copy(x0), R.Rv)
+    copyto!(sv.r, R.Rv)
+    φ0 = sum(abs2, sv.r)
+    PF._set_Δx_nr!(
+        sv, J, data, cache, NewtonRaphsonACPowerFlow(),
+        PF.DEFAULT_REFINEMENT_THRESHOLD, PF.DEFAULT_REFINEMENT_EPS,
+    )
+    sv.Δx_nr .*= 4.0
+    full = copy(sv.Δx_nr)
+    sv.x .+= sv.Δx_nr
+    R(data, sv.x, 1)
+    J_filled = PF._backtrack_step!(R, false, data, sv, 1)
+    α = norm(sv.Δx_nr) / norm(full)
+    @test !J_filled
+    @test α < 1.0
+    @test sv.Δx_nr ≈ α .* full
+    @test sv.x ≈ x0 .+ sv.Δx_nr
+    @test sum(abs2, R.Rv) <= (1 - 2 * PF.MIXED_ARMIJO_C * α) * φ0 ||
+          α ≈ PF.MIXED_MIN_STEP
+
+    Rp, _, xp = PF.initialize_power_flow_variables(
+        ACPowerFlow{NewtonRaphsonACPowerFlow}(),
+        PF.PowerFlowData(ACPowerFlow{NewtonRaphsonACPowerFlow}(), sys), 1)
+    svp = PF.StateVectorCache(xp, Rp.Rv)
+    @test PF._backtrack_step!(Rp, true, data, svp, 1)
+    @test !PF._backtrack_step!(Rp, false, data, svp, 1)
+end

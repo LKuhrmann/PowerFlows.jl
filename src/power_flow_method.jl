@@ -1138,6 +1138,7 @@ function _simple_step(time_step::Int,
     stateVector.x .+= stateVector.Δx_nr
     # update data's fields (the bus angles/voltages) to match x, and update the residual.
     J_filled = _residual_at_step!(residual, J, data, stateVector.x, time_step)
+    J_filled = _backtrack_step!(residual, J_filled, data, stateVector, time_step)
     return J_filled, factored
 end
 
@@ -1204,6 +1205,47 @@ function _residual_at_step!(
 )
     residual(data, x, time_step)
     return false
+end
+
+# Armijo sufficient-decrease constant. A small value accepts any clear decrease of ‖F‖².
+const MIXED_ARMIJO_C = 1e-4
+# Smallest step fraction. A flat start needs a short step more than a failed search.
+const MIXED_MIN_STEP = 1 / 64
+
+"""Hook after the full Newton step. Returns `J_filled`. The polar and rectangular
+residuals keep the full step."""
+function _backtrack_step!(
+    ::Union{ACPowerFlowResidual, ACRectangularCIResidual},
+    J_filled::Bool,
+    ::ACPowerFlowData,
+    ::StateVectorCache,
+    ::Int,
+)
+    return J_filled
+end
+
+"""Armijo backtracking on `‖F‖₂²` for the mixed residual. `stateVector.r` holds `F` at the
+start point. The step halves until `‖F‖₂² <= (1 - 2c α) ‖F₀‖₂²` or `α` reaches
+`MIXED_MIN_STEP`, which stays. Scales `Δx_nr` to the step taken. Returns `false` after a
+cut, because `J` is then stale."""
+function _backtrack_step!(
+    residual::ACMixedCPBResidual,
+    J_filled::Bool,
+    data::ACPowerFlowData,
+    stateVector::StateVectorCache,
+    time_step::Int,
+)
+    φ0 = sum(abs2, stateVector.r)
+    α = 1.0
+    while !(sum(abs2, residual.Rv) <= (1 - 2 * MIXED_ARMIJO_C * α) * φ0) &&
+        α > MIXED_MIN_STEP
+        α /= 2
+        stateVector.x .-= α .* stateVector.Δx_nr
+        residual(data, stateVector.x, time_step)
+        J_filled = false
+    end
+    stateVector.Δx_nr .*= α
+    return J_filled
 end
 
 """Does a single iteration of Newton-Raphson with Iwamoto step control.
