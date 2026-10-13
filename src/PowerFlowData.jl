@@ -736,7 +736,7 @@ function PowerFlowData(
     # Converter AC terminals are ALWAYS irreducible — independent of `model_dc_network`. Reducing a
     # VSC/IC bus away would lose the converter (silently drop it from the joint model, or mishandle
     # its injection when DC modeling is off), so the protection must not depend on the solve mode.
-    irreducible_buses = _dc_converter_ac_buses(sys)
+    irreducible_buses = _dc_converter_selector()
     power_network_matrix = PNM.Ybus(
         sys;
         network_reductions = network_reductions,
@@ -799,7 +799,7 @@ function PowerFlowData(
     ybus = PNM.Ybus(
         sys;
         network_reductions = network_reductions,
-        irreducible_buses = _dc_converter_ac_buses(sys),
+        irreducible_buses = _dc_converter_selector(),
         make_arc_admittance_matrices = pf.lossy_flows,
     )
     power_network_matrix = PNM.ABA_Matrix(ybus; factorize = true)
@@ -868,7 +868,7 @@ function PowerFlowData(
     # get the network matrices
     ybus = PNM.Ybus(sys;
         network_reductions = network_reductions,
-        irreducible_buses = _dc_converter_ac_buses(sys))
+        irreducible_buses = _dc_converter_selector())
     power_network_matrix = PNM.PTDF(ybus)
     aux_network_matrix = PNM.ABA_Matrix(ybus; factorize = true)
     # `get_arc_axis(data)`/`get_bus_lookup(data)` read the PTDF (metadata) matrix for this method.
@@ -920,7 +920,7 @@ function PowerFlowData(
     # get the network matrices
     ybus = PNM.Ybus(sys;
         network_reductions = network_reductions,
-        irreducible_buses = _dc_converter_ac_buses(sys))
+        irreducible_buses = _dc_converter_selector())
     # evaluates an empty virtual PTDF
     power_network_matrix = PNM.VirtualPTDF(ybus; linear_solver = get_linear_solver(pf))
     aux_network_matrix = PNM.ABA_Matrix(ybus; factorize = true)
