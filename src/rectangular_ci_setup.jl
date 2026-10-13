@@ -4,6 +4,9 @@
 Compute per-bus state-vector offsets and block sizes for the augmented
 current-injection (rectangular) formulation. PQ and REF buses occupy 2 entries
 each `(e, f)` or `(P_gen, Q_gen)`; PV buses occupy 3 entries `(e, f, Q)`.
+A PQ bus with `q_slot[i] == true` (never a REF bus) also keeps a 3-entry block.
+The third entry is a pinned Q slot, which the residual forces to 0. This keeps the
+Jacobian sparsity pattern after a PV to PQ flip.
 
 Returns `(offsets, block_sizes, total_bus_state)` where
 - `offsets[i]` is the 1-based start index of bus `i`'s block in the state vector
@@ -14,13 +17,24 @@ Returns `(offsets, block_sizes, total_bus_state)` where
 function compute_bus_state_offsets(
     bus_type::AbstractVector{PSY.ACBusTypes.Value},
 )
+    return compute_bus_state_offsets(bus_type, falses(length(bus_type)))
+end
+
+function compute_bus_state_offsets(
+    bus_type::AbstractVector{PSY.ACBusTypes.Value},
+    q_slot::AbstractVector{Bool},
+)
     n_buses = length(bus_type)
     offsets = Vector{REC_INDEX_TYPE}(undef, n_buses + 1)
     block_sizes = Vector{Int8}(undef, n_buses)
     pos = REC_INDEX_TYPE(1)
     for i in 1:n_buses
         offsets[i] = pos
-        bs = bus_type[i] == PSY.ACBusTypes.PV ? Int8(3) : Int8(2)
+        bs = Int8(2)
+        bt = bus_type[i]
+        if bt == PSY.ACBusTypes.PV || (q_slot[i] && bt != PSY.ACBusTypes.REF)
+            bs = Int8(3)
+        end
         block_sizes[i] = bs
         pos += bs
     end
@@ -99,6 +113,8 @@ function _rect_fill_state!(
                     get_bus_reactive_power_non_impedance_withdrawals(
                         data, i, value_time_step,
                     )
+            elseif bus_state_offset[i + 1] - bus_state_offset[i] == 3
+                x[off + 2] = 0.0  # pinned Q slot of a flipped PV bus
             end
         end
     end
