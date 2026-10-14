@@ -151,3 +151,32 @@ end
     J(data, 1)
     verify_jacobian_asymptotic(R, data, copy(J.Jv), x, 1; label = "rect CI two-swing")
 end
+
+@testset "Rectangular CI Jacobian: pattern kept across a PV->PQ flip" begin
+    sys = PSB.build_system(PSB.PSITestSystems, "c_sys14"; add_forecasts = false)
+    pf_rect = ACRectangularPowerFlow{NewtonRaphsonACPowerFlow}()
+    data = PF.PowerFlowData(pf_rect, sys)
+    q_slot = data.bus_type[:, 1] .== PSY.ACBusTypes.PV
+    R0 = PF.ACRectangularCIResidual(data, 1, q_slot)
+    J0 = PF.ACRectangularCIJacobian(data, R0, 1)
+
+    k = findfirst(q_slot)
+    data.bus_type[k, 1] = PSY.ACBusTypes.PQ
+    R = PF.ACRectangularCIResidual(data, 1, q_slot)
+    J = PF.ACRectangularCIJacobian(data, R, 1)
+    @test R.bus_state_offset == R0.bus_state_offset
+    @test R.bus_block_size == R0.bus_block_size
+    @test J.Jv.colptr == J0.Jv.colptr
+    @test J.Jv.rowval == J0.Jv.rowval
+
+    x = Vector{Float64}(undef, length(R.Rv))
+    PF.rect_initial_state!(x, data, R.bus_state_offset, R.bus_block_size, 1)
+    Random.seed!(42)
+    x .+= 0.02 .* randn(length(x))
+    R(data, x, 1)
+    off = Int(R.bus_state_offset[k])
+    @test R.Rv[off + 2] == x[off + 2]
+    J(data, 1)
+    verify_jacobian_asymptotic(
+        R, data, copy(J.Jv), x, 1; label = "rect CI c_sys14 flipped PV->PQ")
+end

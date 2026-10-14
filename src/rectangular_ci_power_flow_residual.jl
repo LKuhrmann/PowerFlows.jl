@@ -4,7 +4,9 @@
 Residual functor for the augmented current-injection (rectangular) AC power flow.
 Mirrors [`ACPowerFlowResidual`](@ref) but operates on the per-bus variable-block
 state representation: PQ/REF blocks are 2 entries `(e,f)` or `(P_gen, Q_gen)`;
-PV blocks are 3 entries `(e, f, Q)`.
+PV blocks are 3 entries `(e, f, Q)`. A PQ bus can also have a 3-entry block when
+the constructor receives a `q_slot` mask. The third row there is `F = x[off+2]`,
+which pins the unused Q slot to 0, and the current rows use the PQ injection.
 
 # Fields
 - `Rv::Vector{Float64}` — current residual values, length `total_bus_state + 4·n_LCC`
@@ -53,10 +55,19 @@ end
 
 function ACRectangularCIResidual(data::ACPowerFlowData, time_step::Int64)
     n_buses = first(size(data.bus_type))
+    return ACRectangularCIResidual(data, time_step, falses(n_buses))
+end
+
+function ACRectangularCIResidual(
+    data::ACPowerFlowData,
+    time_step::Int64,
+    q_slot::AbstractVector{Bool},
+)
+    n_buses = first(size(data.bus_type))
     n_lccs = size(data.lcc.p_set, 1)
     bus_type = view(data.bus_type, :, time_step)
 
-    offsets, block_sizes, total_bus_state = compute_bus_state_offsets(bus_type)
+    offsets, block_sizes, total_bus_state = compute_bus_state_offsets(bus_type, q_slot)
     validate_offsets = _pqpv_validate_offsets(bus_type, offsets)
     total_state = total_bus_state + state_tail_length(data, get_dc_network(data))
 
@@ -304,6 +315,8 @@ function _update_rect_ci_residual_values!(
                 # V_set² stored in data.bus_magnitude (preserved by rect_update_data!).
                 V_set_sq = data.bus_magnitude[i, time_step]^2
                 F[off + 2] = V_set_sq - V_sq
+            elseif bus_block_size[i] == Int8(3)
+                F[off + 2] = x[off + 2]
             end
         end
     end

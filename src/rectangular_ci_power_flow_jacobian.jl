@@ -13,8 +13,8 @@ than `O((N + n_LCC) · log(nnz_per_col))` of `Jv[r, c] = v` setindex.
 - `Jv::SparseMatrixCSC{Float64, J_INDEX_TYPE}` — Jacobian values
 - `Y_bus_eff::SparseMatrixCSC{ComplexF64, Int}` — Y_bus with ZIP-Z folded in
 - `Y_diag::Vector{ComplexF64}` — cached Y_bus_eff diagonal
-- Bus-diagonal nzval caches `diag_base_nz` (4×n_buses), `pv_extra_nz` (4×n_buses
-  with sentinel 0 for non-PV buses)
+- Bus-diagonal nzval caches `diag_base_nz` (4×n_buses), `pv_extra_nz` (5×n_buses
+  with sentinel 0 for buses with a 2-slot block)
 - Slack cross-term nzval caches `slack_nz_idx_e`, `slack_nz_idx_f`, plus
   `slack_bus_k` / `slack_c_k` for the corresponding per-iteration data
 - LCC tail nzval cache `lcc_nz` (24×n_lccs; the last 2 identity diagonals stay 1.0)
@@ -38,7 +38,9 @@ struct ACRectangularCIJacobian
     total_bus_state::Int
     # nzval-index caches (populated once at construction)
     diag_base_nz::Matrix{Int}        # 4 × n_buses; rows: (off,off), (off,off+1), (off+1,off), (off+1,off+1)
-    pv_extra_nz::Matrix{Int}         # 4 × n_buses; rows: (off,off+2), (off+1,off+2), (off+2,off), (off+2,off+1); 0 for non-PV
+    # 5 × n_buses; rows: (off,off+2), (off+1,off+2), (off+2,off), (off+2,off+1),
+    # (off+2,off+2); 0 for 2-slot blocks
+    pv_extra_nz::Matrix{Int}
     slack_nz_idx_e::Vector{Int}      # nzval index for Jv[k_off, ref_off]
     slack_nz_idx_f::Vector{Int}      # nzval index for Jv[k_off+1, ref_off]
     slack_bus_k::Vector{Int}         # bus_k per slack cross-term
@@ -407,16 +409,18 @@ end
 """
     _build_diag_nz_cache(Jv, bus_state_offset, bus_types)
 
-Return `(diag_base_nz::Matrix{Int}, pv_extra_nz::Matrix{Int})`, each `4 × n_buses`,
-containing the nzval indices for the per-bus diagonal block entries.
+Return `(diag_base_nz::Matrix{Int}, pv_extra_nz::Matrix{Int})`, of size `4 × n_buses`
+and `5 × n_buses`, containing the nzval indices for the per-bus diagonal block entries.
 
 Row layout of `diag_base_nz` (always populated, all bus types):
   1: Jv[off, off],     2: Jv[off, off+1],
   3: Jv[off+1, off],   4: Jv[off+1, off+1]
 
-Row layout of `pv_extra_nz` (only populated for PV; 0 for non-PV):
+Row layout of `pv_extra_nz` (populated for every 3-slot block, a PV bus or a PQ bus
+with a pinned Q slot; 0 for 2-slot blocks):
   1: Jv[off, off+2],   2: Jv[off+1, off+2],
-  3: Jv[off+2, off],   4: Jv[off+2, off+1]
+  3: Jv[off+2, off],   4: Jv[off+2, off+1],
+  5: Jv[off+2, off+2]
 """
 function _build_diag_nz_cache(
     Jv::SparseMatrixCSC{Float64, J_INDEX_TYPE},
@@ -425,18 +429,19 @@ function _build_diag_nz_cache(
 )
     n_buses = length(bus_types)
     diag_base_nz = Matrix{Int}(undef, 4, n_buses)
-    pv_extra_nz = zeros(Int, 4, n_buses)
+    pv_extra_nz = zeros(Int, 5, n_buses)
     @inbounds for i in 1:n_buses
         off = Int(bus_state_offset[i])
         diag_base_nz[1, i] = _jv_nz_index(Jv, off, off)
         diag_base_nz[2, i] = _jv_nz_index(Jv, off, off + 1)
         diag_base_nz[3, i] = _jv_nz_index(Jv, off + 1, off)
         diag_base_nz[4, i] = _jv_nz_index(Jv, off + 1, off + 1)
-        if bus_types[i] == PSY.ACBusTypes.PV
+        if bus_state_offset[i + 1] - bus_state_offset[i] == 3
             pv_extra_nz[1, i] = _jv_nz_index(Jv, off, off + 2)
             pv_extra_nz[2, i] = _jv_nz_index(Jv, off + 1, off + 2)
             pv_extra_nz[3, i] = _jv_nz_index(Jv, off + 2, off)
             pv_extra_nz[4, i] = _jv_nz_index(Jv, off + 2, off + 1)
+            pv_extra_nz[5, i] = _jv_nz_index(Jv, off + 2, off + 2)
         end
     end
     return diag_base_nz, pv_extra_nz
@@ -709,6 +714,7 @@ function _update_rect_ci_jacobian_values!(
             _update_pq_diag_block!(Jvnz, diag_base_nz, i, e_i, f_i, Y_diag[i],
                 P_eff_cache[i], Q_eff_cache[i],
                 const_I_P[i], const_I_Q[i])
+            _update_pinned_q_block!(Jvnz, pv_extra_nz, i)
         elseif bt == PSY.ACBusTypes.PV
             _update_pv_diag_block!(Jvnz, diag_base_nz, pv_extra_nz, i,
                 e_i, f_i, Q_state[i], Y_diag[i],
@@ -826,6 +832,24 @@ end
     @inbounds Jvnz[pv_extra_nz[2, i]] = -e * inv_V_sq
     @inbounds Jvnz[pv_extra_nz[3, i]] = -2 * e
     @inbounds Jvnz[pv_extra_nz[4, i]] = -2 * f
+    @inbounds Jvnz[pv_extra_nz[5, i]] = 0.0
+    return
+end
+
+# A PQ bus with a pinned Q slot has `F[off+2] = x[off+2]`. The current rows do not
+# depend on the Q slot. A PQ bus with a 2-slot block has no extra entries.
+@inline function _update_pinned_q_block!(
+    Jvnz::Vector{Float64},
+    pv_extra_nz::Matrix{Int},
+    i::Int,
+)
+    @inbounds if !iszero(pv_extra_nz[5, i])
+        Jvnz[pv_extra_nz[1, i]] = 0.0
+        Jvnz[pv_extra_nz[2, i]] = 0.0
+        Jvnz[pv_extra_nz[3, i]] = 0.0
+        Jvnz[pv_extra_nz[4, i]] = 0.0
+        Jvnz[pv_extra_nz[5, i]] = 1.0
+    end
     return
 end
 
