@@ -1,6 +1,6 @@
 name = "PowerFlows"
 uuid = "94fada2c-fd9a-4e89-8d82-81405f5cb4f6"
-version = "0.25.3"
+version = "0.25.2"
 authors = ["Jose Daniel Lara", "Gabriel Konar-Steenberg", "Luke Kiernan"]
 
 [deps]
@@ -20,7 +20,7 @@ SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
 
 [sources]
 InfrastructureSystems = {rev = "IS4", url = "https://github.com/Sienna-Platform/InfrastructureSystems.jl.git"}
-PowerNetworkMatrices = {rev = "jd/pf-workarounds-to-pnm", url = "https://github.com/Sienna-Platform/PowerNetworkMatrices.jl.git"}
+PowerNetworkMatrices = {rev = "psy6", url = "https://github.com/Sienna-Platform/PowerNetworkMatrices.jl.git"}
 PowerSystems = {rev = "psy6", url = "https://github.com/Sienna-Platform/PowerSystems.jl.git"}
 
 [compat]

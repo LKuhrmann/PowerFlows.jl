@@ -71,21 +71,17 @@ function _available_vsc_lines(sys::PSY.System, removed_buses::Set{Int})
     return filter(line -> !iszero(PSY.get_g(line)), lines)
 end
 
-# AC bus numbers that host a VSC / MTDC converter terminal. Passed to PNM as `irreducible_buses`
-# so network reduction never removes a converter's AC bus — a reduced-away terminal would silently
-# drop that converter from the joint AC↔DC model. Skips `g == 0` VSC lines (not modeled jointly).
-function _dc_converter_ac_buses(sys::PSY.System)
-    buses = Set{Int}()
-    for l in PSY.get_available_components(PSY.TwoTerminalVSCLine, sys)
-        iszero(PSY.get_g(l)) && continue
-        arc = PSY.get_arc(l)
-        push!(buses, PSY.get_number(PSY.get_from(arc)))
-        push!(buses, PSY.get_number(PSY.get_to(arc)))
-    end
-    for ic in PSY.get_available_components(PSY.InterconnectingConverter, sys)
-        push!(buses, PSY.get_number(PSY.get_bus(ic)))
-    end
-    return buses
+_has_dc_conductance(line::PSY.TwoTerminalVSCLine) = !iszero(PSY.get_g(line))
+
+# The VSC / MTDC converters whose AC buses network reduction must keep. Passed to PNM as
+# `irreducible_buses`, which keeps the arc buses of a VSC line and the bus of an interconnecting
+# converter — a reduced-away terminal would silently drop that converter from the joint AC↔DC
+# model. Skips `g == 0` VSC lines (not modeled jointly).
+function _dc_converter_selector()
+    return PSY.make_selector(
+        PSY.make_selector(_has_dc_conductance, PSY.TwoTerminalVSCLine),
+        PSY.make_selector(PSY.InterconnectingConverter),
+    )
 end
 
 # Union-find connected components over DC branches; validate each connected DC subnet has at least

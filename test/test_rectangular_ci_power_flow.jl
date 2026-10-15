@@ -423,3 +423,25 @@ end
         end
     end
 end
+
+@testset "Rectangular CI Power Flow: Q-limit flip matches polar" begin
+    sys = PSB.build_system(PSB.PSITestSystems, "c_sys14"; add_forecasts = false)
+    kwargs = (; check_reactive_power_limits = true, correct_bustypes = true)
+    data_p = PowerFlowData(ACPolarPowerFlow{NewtonRaphsonACPowerFlow}(; kwargs...), sys)
+    data_r = PowerFlowData(
+        ACRectangularPowerFlow{NewtonRaphsonACPowerFlow}(;
+            solution_parameters = _rect_pf_settings(), kwargs...),
+        sys,
+    )
+    initial_types = copy(data_r.bus_type)
+    @test initial_types == data_p.bus_type
+    @test solve_power_flow!(data_p)
+    @test solve_power_flow!(data_r)
+    flipped =
+        (initial_types .== PSY.ACBusTypes.PV) .&
+        (data_r.bus_type .== PSY.ACBusTypes.PQ)
+    @test any(flipped)
+    @test data_r.bus_type == data_p.bus_type
+    @test isapprox(data_r.bus_magnitude, data_p.bus_magnitude; atol = 1e-6, rtol = 0)
+    @test isapprox(data_r.bus_angles, data_p.bus_angles; atol = 1e-6, rtol = 0)
+end
