@@ -745,7 +745,7 @@ end
 
 # R3: converter AC terminals must be marked irreducible so network reduction can never remove a
 # VSC/IC bus (a reduced-away terminal would silently drop the converter). The protection set comes
-# from `_dc_converter_ac_buses`, passed to PNM as `irreducible_buses` for every PowerFlowData.
+# from `_dc_converter_selector`, passed to PNM as `irreducible_buses` for every PowerFlowData.
 @testset "VSC: converter AC terminals are collected as irreducible buses" begin
     sys, from_no, to_no = _vsc_system(;
         g = 1 / 32.0,
@@ -755,7 +755,7 @@ end
         dc_control_to = PSY.VSCDCControlModes.DC_POWER,
         dc_power_setpoint_to = 0.3,
     )
-    irr = PF._dc_converter_ac_buses(sys)
+    irr = PNM.get_irreducible_bus_numbers(sys, PF._dc_converter_selector())
     @test from_no in irr
     @test to_no in irr
     # a g = 0 (open, unmodeled) VSC line contributes no protected buses
@@ -767,7 +767,7 @@ end
         dc_control_to = PSY.VSCDCControlModes.DC_POWER,
         dc_power_setpoint_to = 0.3,
     )
-    @test isempty(PF._dc_converter_ac_buses(sys0))
+    @test isempty(PNM.get_irreducible_bus_numbers(sys0, PF._dc_converter_selector()))
     # MTDC: every interconnecting-converter AC bus is collected
     msys = _build_mtdc_system()
     ic_buses = Set(
@@ -775,7 +775,10 @@ end
         ic in PSY.get_components(PSY.InterconnectingConverter, msys)
     )
     @test !isempty(ic_buses)
-    @test issubset(ic_buses, PF._dc_converter_ac_buses(msys))
+    @test issubset(
+        ic_buses,
+        PNM.get_irreducible_bus_numbers(msys, PF._dc_converter_selector()),
+    )
 end
 
 # N4: PSS/E .raw has no DC-voltage-droop representation, so a droop converter is exported as MW
@@ -997,6 +1000,7 @@ end
     for (label, PF_T) in (
         ("polar", PF.ACPolarPowerFlow{NewtonRaphsonACPowerFlow}),
         ("rect", PF.ACRectangularPowerFlow{NewtonRaphsonACPowerFlow}),
+        ("mixed", PF.ACMixedPowerFlow{NewtonRaphsonACPowerFlow}),
     )
         sys = _vsc_system_pv_terminal(; g = 1 / 36.0)
         pf = PF_T(; solution_parameters = VSC_SOLUTION_PARAMETERS)
